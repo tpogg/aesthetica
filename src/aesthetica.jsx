@@ -194,6 +194,8 @@ export default function FacialAnalysisApp() {
   const [progressLabel, setProgressLabel] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
+  const [peptideRecs, setPeptideRecs] = useState(null);
+  const [peptideLoading, setPeptideLoading] = useState(false);
   const fileInputRef = useRef(null);
   const canvasRef = useRef(null);
 
@@ -503,6 +505,9 @@ export default function FacialAnalysisApp() {
 
       setAnalysisResult(result);
       setStage("results");
+
+      // Fetch peptide recommendations from PeptideOS API
+      fetchPeptideRecs(result);
     } catch (err) {
       console.error("Analysis error:", err);
       alert(err.message || "Failed to analyze image. Please try a different photo.");
@@ -546,11 +551,61 @@ export default function FacialAnalysisApp() {
     return Math.round(proportionAvg * 0.4 + sym * 0.25 + harmony * 0.25 + skin * 0.1);
   };
 
+  const fetchPeptideRecs = async (result) => {
+    setPeptideLoading(true);
+    try {
+      // Map facial analysis results to peptide API concern parameters
+      const concerns = { skinQuality: 0, antiAging: 0, healing: 0, collagen: 0, inflammation: 0, jawline: 0, lips: 0, eyes: 0, hair: 0 };
+
+      // Skin quality need — inverse of score
+      const skinScore = result.skinQuality || 75;
+      concerns.skinQuality = Math.max(1, Math.round((100 - skinScore) / 10));
+
+      // Anti-aging — always relevant
+      concerns.antiAging = Math.max(3, Math.round((100 - (result.overallHarmony || 75)) / 12) + 3);
+
+      // Collagen — based on skin quality
+      concerns.collagen = Math.max(2, Math.round((100 - skinScore) / 12) + 2);
+
+      // Analyze specific facial concerns
+      for (const concern of (result.concerns || [])) {
+        const area = concern.area.toLowerCase();
+        const sev = concern.severity || 3;
+        if (area.includes("jaw")) concerns.jawline = Math.max(concerns.jawline, sev * 2);
+        if (area.includes("eye") || area.includes("canthal") || area.includes("blephar")) concerns.eyes = Math.max(concerns.eyes, sev * 2);
+        if (area.includes("lip")) concerns.lips = Math.max(concerns.lips, sev * 2);
+        if (area.includes("nose") || area.includes("nasal")) concerns.healing = Math.max(concerns.healing, sev);
+        if (area.includes("symmetry")) concerns.inflammation = Math.max(concerns.inflammation, sev);
+        if (area.includes("skin") || area.includes("upper") || area.includes("lower") || area.includes("middle")) {
+          concerns.skinQuality = Math.max(concerns.skinQuality, sev + 2);
+          concerns.collagen = Math.max(concerns.collagen, sev + 1);
+        }
+      }
+
+      // Clamp all to 1-10
+      for (const k of Object.keys(concerns)) concerns[k] = Math.min(10, Math.max(0, concerns[k]));
+
+      const params = new URLSearchParams();
+      params.set("action", "recommend");
+      for (const [k, v] of Object.entries(concerns)) { if (v > 0) params.set(k, v); }
+
+      const res = await fetch(`https://peptidewars.com/api/peptides?${params.toString()}`);
+      const data = await res.json();
+      if (data.success) {
+        setPeptideRecs(data.peptides.slice(0, 6));
+      }
+    } catch (err) {
+      console.error("Peptide API error:", err);
+    }
+    setPeptideLoading(false);
+  };
+
   const reset = () => {
     setStage("upload");
     setImage(null);
     setImageFile(null);
     setAnalysisResult(null);
+    setPeptideRecs(null);
     setProgress(0);
     setActiveTab("overview");
   };
@@ -736,13 +791,13 @@ export default function FacialAnalysisApp() {
 
       {/* Tabs */}
       <div style={styles.tabBar}>
-        {["overview", "proportions", "procedures", "natural"].map((tab) => (
+        {["overview", "proportions", "procedures", "peptides", "natural"].map((tab) => (
           <button
             key={tab}
             style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}
             onClick={() => setActiveTab(tab)}
           >
-            {tab === "overview" ? "Overview" : tab === "proportions" ? "Proportions" : tab === "procedures" ? "Procedures" : "Natural Tips"}
+            {tab === "overview" ? "Overview" : tab === "proportions" ? "Proportions" : tab === "procedures" ? "Procedures" : tab === "peptides" ? "Peptides" : "Natural Tips"}
           </button>
         ))}
       </div>
@@ -879,6 +934,133 @@ export default function FacialAnalysisApp() {
                   </div>
                 );
               })}
+          </div>
+        )}
+
+        {/* Peptides Tab */}
+        {activeTab === "peptides" && (
+          <div>
+            <div style={styles.card}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                <span style={{ fontSize: 18 }}>🧬</span>
+                <h4 style={{ ...styles.cardTitle, margin: 0 }}>Recommended Peptides</h4>
+              </div>
+              <p style={styles.procIntro}>
+                Based on your facial analysis, these peptides may support your aesthetic goals.
+                Powered by <a href="https://peptidewars.com" target="_blank" rel="noopener" style={{ color: "#c8a97e", textDecoration: "underline" }}>PeptideOS</a>.
+              </p>
+            </div>
+
+            {peptideLoading && (
+              <div style={{ ...styles.card, textAlign: "center", padding: 40 }}>
+                <p style={{ color: "#8a7e6e", fontFamily: "'DM Sans', sans-serif", fontSize: 13 }}>Loading peptide recommendations...</p>
+              </div>
+            )}
+
+            {!peptideLoading && peptideRecs && peptideRecs.map((pep, i) => (
+              <div key={pep.id} style={{
+                ...styles.procCard,
+                borderColor: i === 0 ? "rgba(200,169,126,0.3)" : "#2a2520",
+              }}>
+                <div style={styles.procHeader}>
+                  <span style={{ fontSize: 22 }}>🧬</span>
+                  <div style={styles.procTitleWrap}>
+                    <span style={styles.procName}>{pep.name}</span>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
+                      <span style={{
+                        ...styles.procBadge,
+                        backgroundColor: pep.status.includes("Approved") ? "rgba(16,185,129,0.15)" :
+                          pep.status === "Commercially Available" ? "rgba(16,185,129,0.15)" :
+                          "rgba(200,169,126,0.15)",
+                        color: pep.status.includes("Approved") ? "#10b981" :
+                          pep.status === "Commercially Available" ? "#10b981" :
+                          "#c8a97e",
+                      }}>
+                        {pep.status}
+                      </span>
+                      <span style={{
+                        ...styles.procBadge,
+                        backgroundColor: "rgba(200,169,126,0.08)",
+                        color: "#8a7e6e",
+                      }}>
+                        {pep.category}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={styles.priorityBadge}>
+                    <span style={styles.priorityNum}>#{i + 1}</span>
+                  </div>
+                </div>
+
+                <p style={{ ...styles.procRationale, fontSize: 12 }}>{pep.aka}</p>
+
+                {/* Relevance bar */}
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, color: "#6b6156", fontFamily: "'DM Sans', sans-serif" }}>Relevance Score</span>
+                    <span style={{ fontSize: 10, color: "#c8a97e", fontFamily: "'DM Sans', sans-serif", fontWeight: 600 }}>{pep.relevanceScore.toFixed(1)}</span>
+                  </div>
+                  <div style={{ height: 3, backgroundColor: "#2a2520", borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{
+                      height: "100%",
+                      width: `${Math.min(100, (pep.relevanceScore / 1.5) * 100)}%`,
+                      backgroundColor: "#c8a97e",
+                      borderRadius: 2,
+                      transition: "width 0.8s ease",
+                    }} />
+                  </div>
+                </div>
+
+                {/* Matched areas */}
+                {pep.matchedAreas.length > 0 && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 10 }}>
+                    {pep.matchedAreas.map((area, j) => (
+                      <span key={j} style={{
+                        fontSize: 9,
+                        padding: "2px 8px",
+                        borderRadius: 4,
+                        backgroundColor: "rgba(200,169,126,0.1)",
+                        color: "#c8a97e",
+                        fontFamily: "'DM Sans', sans-serif",
+                        fontWeight: 600,
+                      }}>{area}</span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Aesthetic benefits */}
+                <div style={{ marginBottom: 8 }}>
+                  {pep.aestheticBenefits.slice(0, 3).map((b, j) => (
+                    <div key={j} style={{ display: "flex", gap: 6, marginBottom: 4, alignItems: "flex-start" }}>
+                      <span style={{ color: "#c8a97e", fontSize: 8, marginTop: 4, flexShrink: 0 }}>◆</span>
+                      <span style={{ fontSize: 11, color: "#c4b8a8", fontFamily: "'DM Sans', sans-serif", lineHeight: 1.4 }}>{b}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={styles.procDetails}>
+                  <span style={styles.procDetail}>💉 {pep.administration}</span>
+                  <span style={styles.procDetail}>⏱ {pep.halfLife}</span>
+                </div>
+                <p style={styles.procExpected}>Dosage: {pep.dosageRange}</p>
+              </div>
+            ))}
+
+            {!peptideLoading && (!peptideRecs || peptideRecs.length === 0) && (
+              <div style={{ ...styles.card, textAlign: "center", padding: 30 }}>
+                <p style={{ color: "#6b6156", fontFamily: "'DM Sans', sans-serif", fontSize: 12 }}>
+                  Unable to load peptide recommendations. Visit <a href="https://peptidewars.com" target="_blank" rel="noopener" style={{ color: "#c8a97e" }}>peptidewars.com</a> to explore the full database.
+                </p>
+              </div>
+            )}
+
+            <div style={{ ...styles.card, marginTop: 8 }}>
+              <p style={{ fontSize: 10, color: "#4a4238", fontFamily: "'DM Sans', sans-serif", lineHeight: 1.6, textAlign: "center" }}>
+                Peptide data provided by <a href="https://peptidewars.com" target="_blank" rel="noopener" style={{ color: "#6b6156" }}>PeptideOS</a>.
+                This is for educational purposes only — not medical advice.
+                Always consult a qualified healthcare provider before using any peptide therapy.
+              </p>
+            </div>
           </div>
         )}
 
